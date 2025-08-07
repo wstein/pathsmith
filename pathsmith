@@ -25,7 +25,7 @@ def main
     output_result(shell_target, final_paths)
   when 'config'
     validate_target(shell_target)
-    run_config(shell_target, config, ARGV.dup)
+    run_config(shell_target, config)
   else
     warn "[pathsmith] Unknown subcommand: #{subcommand}"
     exit 2
@@ -35,13 +35,15 @@ end
 def parse_options
   config = {
     paths_file: File.expand_path('~/.config/pathsmith.conf'),
-    verbose: false
+    verbose: false,
+    apply: false
   }
 
-  opts = OptionParser.new do |opts|
+  parser = OptionParser.new do |opts|
     opts.banner = "Usage: pathsmith [-v|--verbose] [-p|--paths PATHFILE] <init|config> <shell> [options]"
     opts.on('-v', '--verbose', 'Enable verbose output') { config[:verbose] = true }
-    opts.on('-pPATH', '--paths=PATH', 'Specify paths file') { |p| config[:paths_file] = File.expand_path(p) }
+    opts.on('-p', '--paths=PATH', 'Specify paths file') { |p| config[:paths_file] = File.expand_path(p) }
+    opts.on('--apply', 'Apply changes (for config subcommand)') { config[:apply] = true }
     opts.on('-h', '--help', 'Show help and exit') do
       puts opts
       exit 0
@@ -49,10 +51,10 @@ def parse_options
   end
 
   begin
-    opts.parse!(ARGV)
+    parser.parse!(ARGV)
   rescue OptionParser::InvalidOption => e
     warn "[pathsmith] #{e.message}"
-    puts opts
+    puts parser
     exit 2
   end
 
@@ -132,17 +134,17 @@ def update_fish_variables_file(fish_variables_path, fish_line)
   File.write(fish_variables_path, new_lines.join)
 end
 
-def run_config(shell_target, config, args)
+def should_apply(config)
+  return true if config[:apply]
+  print "[pathsmith] Apply these changes? [y/N]: "
+  answer = $stdin.gets.strip.downcase
+  answer == 'y' || answer == 'yes'
+end
+
+def run_config(shell_target, config)
   unless shell_target == 'fish'
     puts "[pathsmith] config subcommand is only implemented for 'fish' right now."
     return
-  end
-
-  # Check for --apply flag
-  apply = false
-  if args.include?('--apply')
-    apply = true
-    args.delete('--apply')
   end
 
   # Determine fish_variables file location
@@ -166,7 +168,7 @@ def run_config(shell_target, config, args)
   puts fish_line
   puts "[pathsmith] fish_variables file: #{fish_variables_path}"
 
-  if apply
+  if should_apply(config)
     begin
       update_fish_variables_file(fish_variables_path, fish_line)
       puts "[pathsmith] Updated fish_user_paths in #{fish_variables_path} (hex-sep format)"
@@ -175,13 +177,7 @@ def run_config(shell_target, config, args)
       exit 1
     end
   else
-    print "[pathsmith] Apply these changes? [y/N]: "
-    answer = $stdin.gets.strip.downcase
-    if answer == 'y' || answer == 'yes'
-      run_config(shell_target, config, args + ['--apply'])
-    else
-      puts "[pathsmith] No changes applied."
-    end
+    puts "[pathsmith] No changes applied."
   end
 end
 
