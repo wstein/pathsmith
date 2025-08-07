@@ -9,14 +9,27 @@ require 'shellwords'
 
 def main
   config = parse_options
-  shell_target = (ARGV.shift || 'sh').downcase
-  validate_target(shell_target)
+  if ARGV.length != 2
+    warn "[pathsmith] Usage: pathsmith <init|config> <shell> [options]"
+    exit 2
+  end
+  subcommand = ARGV.shift
+  shell_target = ARGV.shift.downcase
 
-  raw_lines = read_paths_file(config[:paths_file], config[:verbose])
-  all_paths = merge_with_env_path(raw_lines)
-  final_paths = process_paths(all_paths, config[:verbose])
-
-  output_result(shell_target, final_paths)
+  case subcommand
+  when 'init'
+    validate_target(shell_target)
+    raw_lines = read_paths_file(config[:paths_file], config[:verbose])
+    all_paths = merge_with_env_path(raw_lines)
+    final_paths = process_paths(all_paths, config[:verbose])
+    output_result(shell_target, final_paths)
+  when 'config'
+    validate_target(shell_target)
+    run_config(shell_target, config)
+  else
+    warn "[pathsmith] Unknown subcommand: #{subcommand}"
+    exit 2
+  end
 end
 
 def parse_options
@@ -97,11 +110,87 @@ def output_result(shell_target, final_paths)
   when 'list'
     final_paths.each { |p| puts p }
   when 'fish'
-    puts "set -gx PATH #{final_paths.map { |p| Shellwords.escape(p) }.join(' ')};"
+    puts "set -x PATH #{final_paths.map { |p| Shellwords.escape(p) }.join(' ')};"
   when 'nu', 'nushell', 'pwsh', 'powershell'
     puts "$env:PATH = \"#{final_paths.join(';')}\""
   else
     puts "export PATH=#{final_paths.map { |p| Shellwords.escape(p) }.join(File::PATH_SEPARATOR)}"
+  end
+end
+
+def run_config(shell_target, config)
+  unless shell_target == 'fish'
+    puts "[pathsmith] config subcommand is only implemented for 'fish' right now."
+    return
+  end
+
+  # Check for --apply flag
+  apply = false
+  if ARGV.include?('--apply')
+    apply = true
+    ARGV.delete('--apply')
+  end
+
+  # Determine fish_variables file location
+  fish_config_dir = ENV['__fish_config_dir'] || File.expand_path('~/.config/fish')
+  fish_variables_path = File.join(fish_config_dir, 'fish_variables')
+
+  # Gather valid paths
+  raw_lines = read_paths_file(config[:paths_file], config[:verbose])
+  all_paths = raw_lines
+    .map(&:strip)
+    .reject { |line| line.empty? || line.start_with?('#') }
+    .map(&method(:expand_path))
+    .select { |path| absolute_path?(path) }
+    .select { |path| validate_directory(path, config[:verbose]) }
+    .uniq
+
+  if all_paths.empty?
+    puts '[pathsmith] No valid paths to add.'
+    return
+  end
+
+  # Prepare hex-separated format
+  hex_sep = '\\x1e'
+  fish_list = all_paths.map { |p| p.gsub('-', '\\x2d') }.join(hex_sep)
+  fish_line = "SETUVAR fish_user_paths:#{fish_list}\n"
+
+  puts "[pathsmith] Would set fish_user_paths to (hex-sep format):"
+  puts fish_line
+  puts "[pathsmith] fish_variables file: #{fish_variables_path}"
+
+  if apply
+    begin
+      lines = File.exist?(fish_variables_path) ? File.read(fish_variables_path).lines : []
+      new_lines = []
+      replaced = false
+      lines.each do |line|
+        # Remove any new-format or old-format fish_user_paths lines
+        if line =~ /^SETUVAR\s+fish_user_paths\s+\d+\s+.*$/ || line =~ /^SETUVAR fish_user_paths:/
+          unless replaced
+            new_lines << fish_line
+            replaced = true
+          end
+        else
+          new_lines << line
+        end
+      end
+      new_lines << fish_line unless replaced
+      File.write(fish_variables_path, new_lines.join)
+      puts "[pathsmith] Updated fish_user_paths in #{fish_variables_path} (hex-sep format)"
+    rescue => e
+      warn "[pathsmith] Failed to update fish_variables: #{e}"
+      exit 1
+    end
+  else
+    print "[pathsmith] Apply these changes? [y/N]: "
+    answer = $stdin.gets.strip.downcase
+    if answer == 'y' || answer == 'yes'
+      ARGV << '--apply'
+      run_config(shell_target, config)
+    else
+      puts "[pathsmith] No changes applied."
+    end
   end
 end
 
