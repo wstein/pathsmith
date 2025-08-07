@@ -1,6 +1,6 @@
 #!/usr/bin/env ruby
 # pathsmith: Generate shell scripts to set PATH for various shells
-# Usage: pathsmith [-v|--verbose] [-p|--paths PATHFILE] SHELL
+# Usage: pathsmith [-v|--verbose] [-p|--paths PATHFILE] <init|config> <shell> [options]
 # Outputs shell code to stdout. Source it in your shell config.
 
 require 'optparse'
@@ -9,7 +9,7 @@ require 'shellwords'
 
 def main
   config = parse_options
-  if ARGV.length != 2
+  if ARGV.length < 2
     warn "[pathsmith] Usage: pathsmith <init|config> <shell> [options]"
     exit 2
   end
@@ -19,13 +19,13 @@ def main
   case subcommand
   when 'init'
     validate_target(shell_target)
-    raw_lines = read_paths_file(config[:paths_file], config[:verbose])
-    all_paths = merge_with_env_path(raw_lines)
-    final_paths = process_paths(all_paths, config[:verbose])
+    raw_lines_from_file = read_paths_file(config[:paths_file], config[:verbose])
+    raw_lines_from_env = (ENV['PATH'] || '').split(File::PATH_SEPARATOR)
+    final_paths = process_paths(raw_lines_from_file + raw_lines_from_env, config[:verbose])
     output_result(shell_target, final_paths)
   when 'config'
     validate_target(shell_target)
-    run_config(shell_target, config)
+    run_config(shell_target, config, ARGV.dup)
   else
     warn "[pathsmith] Unknown subcommand: #{subcommand}"
     exit 2
@@ -38,15 +38,23 @@ def parse_options
     verbose: false
   }
 
-  OptionParser.new do |opts|
-    opts.banner = "Usage: pathsmith [-v|--verbose] [-p|--paths PATHFILE] SHELL"
+  opts = OptionParser.new do |opts|
+    opts.banner = "Usage: pathsmith [-v|--verbose] [-p|--paths PATHFILE] <init|config> <shell> [options]"
     opts.on('-v', '--verbose', 'Enable verbose output') { config[:verbose] = true }
     opts.on('-pPATH', '--paths=PATH', 'Specify paths file') { |p| config[:paths_file] = File.expand_path(p) }
-    opts.on('-h', '--help', 'Show help') do
+    opts.on('-h', '--help', 'Show help and exit') do
       puts opts
       exit 0
     end
-  end.parse!(ARGV)
+  end
+
+  begin
+    opts.parse!(ARGV)
+  rescue OptionParser::InvalidOption => e
+    warn "[pathsmith] #{e.message}"
+    puts opts
+    exit 2
+  end
 
   config
 end
@@ -77,10 +85,6 @@ rescue StandardError => e
   exit 1
 end
 
-def merge_with_env_path(raw_lines)
-  (raw_lines + (ENV['PATH'] || '').split(File::PATH_SEPARATOR)).freeze
-end
-
 def process_paths(all_paths, verbose)
   all_paths
     .map(&:strip)
@@ -108,7 +112,7 @@ end
 def output_result(shell_target, final_paths)
   case shell_target
   when 'list'
-    final_paths.each { |p| puts p }
+    puts final_paths.join("\n")
   when 'fish'
     puts "set -x PATH #{final_paths.map { |p| Shellwords.escape(p) }.join(' ')};"
   when 'nu', 'nushell', 'pwsh', 'powershell'
@@ -118,7 +122,17 @@ def output_result(shell_target, final_paths)
   end
 end
 
-def run_config(shell_target, config)
+def update_fish_variables_file(fish_variables_path, fish_line)
+  lines = File.exist?(fish_variables_path) ? File.readlines(fish_variables_path) : []
+  
+  # Functionally remove old lines and add the new one
+  new_lines = lines.reject { |line| line.start_with?('SETUVAR fish_user_paths:') || line.start_with?('SETUVAR fish_user_paths ') }
+  new_lines << fish_line
+  
+  File.write(fish_variables_path, new_lines.join)
+end
+
+def run_config(shell_target, config, args)
   unless shell_target == 'fish'
     puts "[pathsmith] config subcommand is only implemented for 'fish' right now."
     return
@@ -126,24 +140,17 @@ def run_config(shell_target, config)
 
   # Check for --apply flag
   apply = false
-  if ARGV.include?('--apply')
+  if args.include?('--apply')
     apply = true
-    ARGV.delete('--apply')
+    args.delete('--apply')
   end
 
   # Determine fish_variables file location
-  fish_config_dir = ENV['__fish_config_dir'] || File.expand_path('~/.config/fish')
+  fish_config_dir = ENV['XDG_CONFIG_HOME'] ? File.join(ENV['XDG_CONFIG_HOME'], 'fish') : File.expand_path('~/.config/fish')
   fish_variables_path = File.join(fish_config_dir, 'fish_variables')
 
-  # Gather valid paths
-  raw_lines = read_paths_file(config[:paths_file], config[:verbose])
-  all_paths = raw_lines
-    .map(&:strip)
-    .reject { |line| line.empty? || line.start_with?('#') }
-    .map(&method(:expand_path))
-    .select { |path| absolute_path?(path) }
-    .select { |path| validate_directory(path, config[:verbose]) }
-    .uniq
+  raw_paths = read_paths_file(config[:paths_file], config[:verbose])
+  all_paths = process_paths(raw_paths, config[:verbose])
 
   if all_paths.empty?
     puts '[pathsmith] No valid paths to add.'
@@ -161,22 +168,7 @@ def run_config(shell_target, config)
 
   if apply
     begin
-      lines = File.exist?(fish_variables_path) ? File.read(fish_variables_path).lines : []
-      new_lines = []
-      replaced = false
-      lines.each do |line|
-        # Remove any new-format or old-format fish_user_paths lines
-        if line =~ /^SETUVAR\s+fish_user_paths\s+\d+\s+.*$/ || line =~ /^SETUVAR fish_user_paths:/
-          unless replaced
-            new_lines << fish_line
-            replaced = true
-          end
-        else
-          new_lines << line
-        end
-      end
-      new_lines << fish_line unless replaced
-      File.write(fish_variables_path, new_lines.join)
+      update_fish_variables_file(fish_variables_path, fish_line)
       puts "[pathsmith] Updated fish_user_paths in #{fish_variables_path} (hex-sep format)"
     rescue => e
       warn "[pathsmith] Failed to update fish_variables: #{e}"
@@ -186,8 +178,7 @@ def run_config(shell_target, config)
     print "[pathsmith] Apply these changes? [y/N]: "
     answer = $stdin.gets.strip.downcase
     if answer == 'y' || answer == 'yes'
-      ARGV << '--apply'
-      run_config(shell_target, config)
+      run_config(shell_target, config, args + ['--apply'])
     else
       puts "[pathsmith] No changes applied."
     end

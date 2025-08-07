@@ -1,66 +1,87 @@
-# PathSmith: Dynamic PATH Merger
+# PathSmith: Dynamic PATH Manager
 
 ## Purpose
 
-PathSmith dynamically manages your PATH environment variable by loading, validating, and merging directory paths from a configurable file.
+PathSmith dynamically manages your shell's `PATH` environment variable and other shell-specific configurations by loading, validating, and merging directory paths from a single, clean configuration file.
 
 ## Supported Shells
 
-- posix shell family (sh, ash, bash, zsh)
-- nushell
-- fish
-- PowerShell (pwsh)
+- **`init` command**: posix shell family (sh, ash, bash, zsh), nushell, fish, PowerShell (pwsh)
+- **`config` command**: fish (currently)
 
 ## Usage
 
-1. Run the script to generate a shell script for your shell (bash, zsh, nushell, fish, pwsh):
-   ```sh
-   pathsmith [-v|--verbose] [-p|--paths PATHLIST] SHELL
-   ```
-   - Example for bash:
+PathSmith now uses subcommands: `init` and `config`.
 
-     ```sh
-     eval -- $(pathsmith bash)
-     ```
+```sh
+pathsmith [-v|--verbose] [-p|--paths PATHFILE] <init|config> <shell> [options]
+```
 
-   - Example for zsh:
+### `init` Subcommand
 
-     ```sh
-     eval -- $(pathsmith zsh)
-     ```
+The `init` subcommand generates shell code to set your `PATH` for the current session. It merges paths from your `pathsmith.conf` file with your existing `PATH`.
 
-   - Example for list (show the final list of paths, one per line):
+You should evaluate this command in your shell's configuration file (e.g., `.bashrc`, `.zshrc`, `config.fish`).
 
-     ```sh
-     pathsmith list
-     ```
+- **Example for bash:**
+  ```sh
+  eval -- $(pathsmith init bash)
+  ```
 
-   - Example for nushell:
+- **Example for zsh:**
+  ```sh
+  eval -- $(pathsmith init zsh)
+  ```
 
-     ```sh
-     pathsmith nu | save ~/.config/nushell/pathsmith.nu; source ~/.config/nushell/pathsmith.nu
-     ```
+- **Example for fish:**
+  ```fish
+  pathsmith init fish | source
+  ```
 
-     > **Note:** Nushell does not support `eval`/`source` in the same way as POSIX shells. A different approach may be needed for full integration in the future.
+- **Example for nushell:**
+  ```sh
+  pathsmith init nu | save ~/.config/nushell/pathsmith.nu; source ~/.config/nushell/pathsmith.nu
+  ```
 
-   - Example for fish:
+- **Example for PowerShell (pwsh):**
+  ```powershell
+  Invoke-Expression -Command $(pathsmith init pwsh)
+  ```
 
-     ```fish
-     pathsmith fish | source
-     ```
+- **Example for list (show the final list of paths, one per line):**
+  ```sh
+  pathsmith init list
+  ```
 
-   - Example for PowerShell (pwsh):
+### `config` Subcommand
 
-     ```powershell
-     Invoke-Expression -Command $(pathsmith pwsh)
-     ```
+The `config` subcommand provides persistent, shell-specific configuration.
+
+#### Fish Shell
+
+For `fish`, this command directly modifies the `fish_variables` file to persistently set `fish_user_paths`. This is the recommended way to manage your path in Fish.
+
+```sh
+# Run a dry-run to see what changes would be made
+pathsmith config fish
+
+# Apply the changes after reviewing
+pathsmith config fish --apply
+```
+
+The command will also prompt for confirmation if `--apply` is not provided.
 
 ## Arguments
 
+### Global Options
 - `-v`, `--verbose`: Enable verbose output (writes details to stderr).
 - `-p PATHFILE`, `--paths PATHFILE`: Specify a custom paths file. Defaults to `~/.config/pathsmith.conf` if not provided.
-- `SHELL`: Target shell for output (e.g., `bash`, `zsh`, `nu`, `fish`, `pwsh`, `list`).
 - `-h`, `--help`: Show usage information.
+
+### Subcommands
+- `init <shell>`: Generates shell code to set `PATH` for the current session.
+- `config <shell>`: Manages persistent configuration for the specified shell.
+  - `--apply`: (For `config` command) Apply changes without prompting for confirmation.
 
 ## Configuration
 
