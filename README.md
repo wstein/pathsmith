@@ -59,17 +59,15 @@ The `config` subcommand provides persistent, shell-specific configuration.
 
 #### Fish Shell
 
-For `fish`, this command directly modifies the `fish_variables` file to persistently set `fish_user_paths`. This is the recommended way to manage your path in Fish.
+For `fish`, this command updates the `fish_variables` file to persistently set `fish_user_paths`, ensuring that custom paths are managed in a way that integrates cleanly with Fish's path handling (see [Fish shell path best practices](https://fishshell.com/docs/current/index.html#envvar-fish_user_paths)).
 
 ```sh
-# Run a dry-run to see what changes would be made
+# Preview changes first - the command will ask for confirmation before applying.
 pathsmith config fish
 
-# Apply the changes after reviewing
+# Direct apply changes without asking
 pathsmith config fish --apply
 ```
-
-The command will also prompt for confirmation if `--apply` is not provided.
 
 ## Arguments
 
